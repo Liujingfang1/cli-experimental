@@ -14,32 +14,40 @@ limitations under the License.
 package wirek8s
 
 import (
-	"bytes"
 	"fmt"
 	"io/ioutil"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/google/wire"
 	"github.com/spf13/cobra"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/cli-runtime/pkg/kustomize"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/cli-experimental/internal/pkg/clik8s"
+	"sigs.k8s.io/cli-experimental/internal/pkg/resourceconfig"
 	"sigs.k8s.io/cli-experimental/internal/pkg/util"
+	"sigs.k8s.io/kustomize/k8sdeps"
+	"sigs.k8s.io/kustomize/pkg/factory"
 	"sigs.k8s.io/kustomize/pkg/fs"
+	"sigs.k8s.io/kustomize/pkg/ifc/transformer"
+	"sigs.k8s.io/kustomize/pkg/resmap"
 	"sigs.k8s.io/yaml"
 
 	// for connecting to various types of hosted clusters
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 )
 
+// ConfigProviderSet defines dependencies for initializing ConfigProvider
+var ConfigProviderSet = wire.NewSet(
+	NewKustomizeFactory, NewResMapFactory, NewTransformerFactory,
+	NewFileSystem, NewConfigProvider)
+
 // ProviderSet defines dependencies for initializing Kubernetes objects
 var ProviderSet = wire.NewSet(NewKubernetesClientSet, NewKubeConfigPathFlag, NewRestConfig,
-	NewMasterFlag, NewResourceConfig, NewFileSystem)
+	NewMasterFlag, NewResourceConfig, ConfigProviderSet)
 var kubeConfigPathFlag string
 var master string
 
@@ -73,36 +81,47 @@ func NewRestConfig(master clik8s.MasterURL, path clik8s.KubeConfigPath) (*rest.C
 	return clientcmd.BuildConfigFromFlags(string(master), string(path))
 }
 
+// NewKustomizeFactory returns a new factory need by Kustomize
+func NewKustomizeFactory() *factory.KustFactory {
+	return k8sdeps.NewFactory()
+}
+
+// NewResMapFactory returns a new resmap factory
+func NewResMapFactory(f *factory.KustFactory) *resmap.Factory {
+	return f.ResmapF
+}
+
+// NewTransformerFactory returns a new transformer factory
+func NewTransformerFactory(f *factory.KustFactory) transformer.Factory {
+	return f.TransformerF
+}
+
+// NewFileSystem returns a new filesystem
+func NewFileSystem() fs.FileSystem {
+	return fs.MakeRealFS()
+}
+
+// NewConfigProvider returns a new ConfigProvider
+func NewConfigProvider(rf *resmap.Factory, fSys fs.FileSystem, tf transformer.Factory) resourceconfig.ConfigProvider {
+	return &resourceconfig.KustomizeProvider{
+		RF: rf,
+		TF: tf,
+		FS: fSys,
+	}
+}
+
 // NewKubernetesClientSet provides a clientset for talking to k8s clusters
 func NewKubernetesClientSet(c *rest.Config) (*kubernetes.Clientset, error) {
 	return kubernetes.NewForConfig(c)
 }
 
-// NewFileSystem provides a real FileSystem
-func NewFileSystem() fs.FileSystem {
-	return fs.MakeRealFS()
-}
-
 // NewResourceConfig provides ResourceConfigs read from the ResourceConfigPath and FileSystem.
-func NewResourceConfig(rcp clik8s.ResourceConfigPath, sysFs fs.FileSystem) (clik8s.ResourceConfigs, error) {
+func NewResourceConfig(rcp clik8s.ResourceConfigPath, cp resourceconfig.ConfigProvider) (clik8s.ResourceConfigs, error) {
 	p := string(rcp)
 	var values clik8s.ResourceConfigs
 
-	// TODO: Support urls
-	fi, err := os.Stat(p)
-	if err != nil {
-		return nil, err
-	}
-
-	// Kustomization file.  Don't allow recursing on directories with raw Resource Config,
-	// should use a kustomization.yaml instead.
-	if fi.IsDir() {
-		k, err := doDir(p, sysFs)
-		if err != nil {
-			return nil, err
-		}
-		values = append(values, k...)
-		return values, nil
+	if cp.IsSupported(p) {
+		return cp.GetConfig(p)
 	}
 
 	r, err := doFile(p)
@@ -111,25 +130,6 @@ func NewResourceConfig(rcp clik8s.ResourceConfigPath, sysFs fs.FileSystem) (clik
 	}
 	values = append(values, r...)
 
-	return values, nil
-}
-
-func doDir(p string, sysFs fs.FileSystem) (clik8s.ResourceConfigs, error) {
-	var values clik8s.ResourceConfigs
-	buf := &bytes.Buffer{}
-	err := kustomize.RunKustomizeBuild(buf, sysFs, p)
-	if err != nil {
-		return nil, err
-	}
-	objs := strings.Split(buf.String(), "---")
-	for _, o := range objs {
-		body := map[string]interface{}{}
-
-		if err := yaml.Unmarshal([]byte(o), &body); err != nil {
-			return nil, err
-		}
-		values = append(values, &unstructured.Unstructured{Object: body})
-	}
 	return values, nil
 }
 

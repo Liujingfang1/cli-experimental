@@ -44,7 +44,8 @@ func setupKustomize(t *testing.T) string {
 	err = ioutil.WriteFile(filepath.Join(f, "kustomization.yaml"), []byte(`apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 configMapGenerator:
-- name: testMap
+- name: testmap
+namespace: default
 `), 0644)
 	assert.NoError(t, err)
 	return f
