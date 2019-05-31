@@ -40,6 +40,7 @@ require (
 	golang.org/x/sys v0.0.0-20190506115046-ca7f33d4116e // indirect
 	golang.org/x/text v0.3.2 // indirect
 	golang.org/x/time v0.0.0-20190308202827-9d24e82272b4 // indirect
+	golang.org/x/tools v0.0.0-20190422233926-fe54fb35175b
 	gopkg.in/src-d/go-git.v4 v4.10.0
 	k8s.io/api v0.0.0-20190327184913-92d2ee7fc726
 	k8s.io/apiextensions-apiserver v0.0.0-20190328030136-8ada4fd07db4
